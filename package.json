@@ -1,0 +1,12 @@
+{
+  "name": "flappybird",
+  "description": "Flappy Bird Game Final Version for Spiraladder",
+  "version": "0.1.0",
+  "author": "Todd Chaffee <tc@bluecrow.biz>",  
+  "devDependencies": {
+    "http-server": "^0.11.1"
+  },
+  "scripts": {
+    "develop": "http-server"
+  }
+}
