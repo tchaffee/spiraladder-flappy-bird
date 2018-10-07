@@ -1,338 +1,327 @@
-let flappyBird = (function () {
+/* global document, Image, Audio, requestAnimationFrame, CustomEvent */
+const flappyBird = (() => {
+  const canvas = document.getElementById('canvas');
+  const context = canvas.getContext('2d');
 
-  // Set up and variables that apply to the entire game.
-  // TODO: Should the canvas be here?
-  const game = (function () {
+  const gravity = 1.5;
+  const pipeGap = 200;
+  let background;
+  let foreground;
+  let pipes;
+  let bird;
 
-    let score;
-    let gravity = 1.5;
+  const pipeRemovedEvent = new CustomEvent('pipeRemoved');
+  const scoredEvent = new CustomEvent('scored');
+  const birdMovedUp = new CustomEvent('birdMovedUp');
 
-    function reset() {
-      game.score = 0;
-      images.reset();
-      pipes.reset();
-    }
+  const assetsBaseUrl = 'https://s3-us-west-2.amazonaws.com/spiraladder-flappybird/';
 
-    // TODO: Can we pass the bird object to this?
-    function moveUp() {
-      if (images.bird.yPos > 25) {
-        images.bird.yPos -= 25;
-      }
-      sounds.fly.play();
-    }
+  const load = (() => {
+    const getImage = () => url => new Promise((resolve, reject) => {
+      const image = new Image();
 
-    // Move the bird up with any key press.
-    document.addEventListener('keydown', moveUp);    
+      // Important success and error for the promise
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(url);
 
-    function increaseScore() {
-      game.score++;
-      sounds.score.play();
-    }
+      // Start fetching the image.
+      image.src = url;
+    });
 
     return {
-      gravity: gravity,
-      score: score,
-      reset: reset,
-      increaseScore: increaseScore
+      image: getImage(),
     };
-
   })();
-
-  // TODO: Not sure if we need this. It only hides two variables...
-  const drawing = (function () {
-    const canvas = document.getElementById('canvas');
-    const context = canvas.getContext('2d');
-
-    return {
-      canvas: canvas,
-      context: context
-    }
-  })();
-
-  // List of pipes.
-  let pipes = (function () {
-
-    let pipeList;
-    let pipeGap;
-
-    function isPipeOffScreen(pipe) {
-      // TODO: Make this DRY
-      const pipeBack =  pipe.x + images.pipeTop.width;
-
-      return pipeBack < 0;
-    }
-
-    function removeFirstPipe() {
-      // How can I decouple this?
-      game.increaseScore();
-      pipeList.shift();
-    }
-
-    function draw() {
-
-      // If the first pipe is no longer visible, remove it.
-      if (isPipeOffScreen(pipeList[0])) {
-        removeFirstPipe();
-      }
-
-      for(var i = 0; i < pipeList.length; i++){        
-
-        // Move the pipe to the left.
-        pipeList[i].x--;
-
-        drawOnePipe(pipeList[i]);
-
-        if (needNewPipe(pipeList[i])) {
-          newPipe();
-        }
-
-      }
-    }
-
-    function drawOnePipe(pipe) {
-      images.pipeTop.draw(pipe.x, pipe.topY);
-      images.pipeBottom.draw(pipe.x, pipe.bottomY);
-    }
-
-    function needNewPipe(pipe) {
-      return pipe.x === 100;
-    }
-    
-    function newPipe() {
-      const y = 
-        Math.floor(Math.random() * images.pipeTop.height) - 
-        images.pipeTop.height;
-
-      add(y);
-    }
-
-    // Adds a pipe to the list of pipes.
-    function add(y) {
-      pipeList.push({
-          x : drawing.canvas.width - images.pipeTop.width,
-          topY : y,
-          bottomY : y + pipes.pipeGap
-      }); 
-    }
-
-    function reset() {
-      pipeList = [];
-      add(0);
-    }
-
-    function getPipe(i) {
-      return pipeList[i];
-    }
-
-    // TODO: Can pipeGap be made internal?
-    return {
-      add: add,
-      reset: reset,
-      pipeGap: pipeGap,
-      draw: draw,
-      getPipe: getPipe
-    }
-
-  })();
-
-  const assetsBaseUrl = 
-    'https://s3-us-west-2.amazonaws.com/spiraladder-flappybird/';
-
 
   // Images
-  const images = (function (assetsBaseUrl, drawing, pipes) {
-    const bird = new Image();
-    const background = new Image();
-    const foreground = new Image();
-    const pipeTop = new Image();
-    const pipeBottom = new Image();
+  const images = ((baseUrl) => {
+    const imageStore = {};
 
-    const totalImages = 5;
-    let loadedImages = 0;
+    const loadImage = name => load.image(`${baseUrl}${name}.png`)
+      .then((image) => { imageStore[name] = image; });
 
-    bird.src = assetsBaseUrl + 'bird.png';
-    background.src = assetsBaseUrl + 'background.png';
-    foreground.src = assetsBaseUrl + 'foreground.png';
-    pipeTop.src = assetsBaseUrl + 'pipeTop.png';
-    pipeBottom.src = assetsBaseUrl + 'pipeBottom.png';
+    const ready = () => Promise.all([
+      loadImage('bird'),
+      loadImage('background'),
+      loadImage('foreground'),
+      loadImage('pipeTop'),
+      loadImage('pipeBottom'),
+    ]);
 
-    bird.draw = function () {
-      drawing.context.drawImage(this, this.xPos, this.yPos);
+    const get = name => imageStore[name];
+
+    return {
+      get,
+      ready,
+    };
+  })(assetsBaseUrl);
+
+  // Sounds
+  const sounds = ((baseUrl) => {
+    const flyAudio = new Audio();
+    const scoreAudio = new Audio();
+
+    flyAudio.src = `${baseUrl}fly.mp3`;
+    scoreAudio.src = `${baseUrl}score.mp3`;
+
+    return {
+      fly: flyAudio,
+      score: scoreAudio,
+    };
+  })(assetsBaseUrl);
+
+  class Sprite {
+    constructor(x, y, image) {
+      this.height = image.height;
+      this.width = image.width;
+      this.x = x;
+      this.y = y;
+      this.image = image;
     }
-    bird.draw.bind(bird);
 
-    background.draw = function () {
-      drawing.context.drawImage(background, 0, 0);
+    draw() {
+      context.drawImage(
+        this.image,
+        this.x,
+        this.y,
+      );
+    }
+  }
+
+  // Everything to do with scoring.
+  const score = (() => {
+    let scoreValue = 0;
+
+    const get = () => scoreValue;
+
+    const plus = () => {
+      scoreValue += 1;
+      document.dispatchEvent(scoredEvent);
+    };
+
+    const reset = () => { scoreValue = 0; };
+
+    const draw = () => {
+      context.fillStyle = '#000';
+      context.font = '20px Verdana';
+      context.fillText(`Score : ${scoreValue}`, 10, canvas.height - 20);
+    };
+
+    return {
+      draw,
+      get,
+      plus,
+      reset,
+    };
+  })();
+
+  // Bird
+  class Bird extends Sprite {
+    reset() {
+      this.x = 5;
+      this.y = 150;
     }
 
-    foreground.draw = function () {
-      drawing.context.drawImage(foreground, 0, 
-        drawing.canvas.height - images.foreground.height
+    moveUp() {
+      // Don't allow the bird to go any higher than the top.
+      if (this.y > 25) {
+        this.y -= 25;
+      }
+      document.dispatchEvent(birdMovedUp);
+    }
+
+    applyGravity() {
+      this.y += gravity;
+    }
+  }
+
+  class PipePair {
+    static getPipeBottomOffset(yVal) {
+      return yVal + images.get('pipeTop').height + pipeGap;
+    }
+
+    constructor(x, y) {
+      this.top = new Sprite(x, y, images.get('pipeTop'));
+
+      this.bottom = new Sprite(
+        x,
+        PipePair.getPipeBottomOffset(y),
+        images.get('pipeBottom'),
       );
     }
 
-    pipeTop.draw = function (x, y) {
-      drawing.context.drawImage(pipeTop, x, y);
+    draw() {
+      this.top.draw();
+      this.bottom.draw();
     }
 
-    pipeBottom.draw = function (x, y) {
-      drawing.context.drawImage(pipeBottom, x, y);
+    move() {
+      this.top.x -= 1;
+      this.bottom.x = this.top.x;
     }
+  }
 
-    function imageLoaded () {
-      loadedImages++;
-    }
+  // List of pipes.
+  const createPipes = () => {
+    let pipeList;
+    const positionForNewPipe = 50;
 
-    bird.onload = imageLoaded;
-    background.onload = imageLoaded;
-    foreground.onload = imageLoaded;
-    pipeBottom.onload = imageLoaded;
+    const isFirstPipeOffScreen = () => {
+      // TODO: Make this DRY
+      const pipeBack = pipeList[0].top.x + pipeList[0].top.width;
+      return pipeBack < 0;
+    };
 
-    pipeTop.onload = function () {
-      const gap = 200;
-      console.log('setting pipegap.');
-      pipes.pipeGap = images.pipeTop.height + gap;
-      imageLoaded();
-    }
+    const removeFirstPipe = () => {
+      pipeList[0] = null;
+      pipeList.shift();
+      document.dispatchEvent(pipeRemovedEvent);
+    };
 
-    bird.applyGravity= function() {
+    const needNewPipe = () => pipeList[0].top.x === positionForNewPipe;
 
-      // Don't let the bird go below the foreground.
-      // TODO: Check this calculation
-      if (bird.yPos < 
-        (images.background.height - images.foreground.height - bird.height))
-      {
-        bird.yPos += game.gravity;
+    const randomY = () => Math.floor(Math.random()
+      * images.get('pipeTop').height)
+      - images.get('pipeTop').height;
+
+    // Adds a pipe to the list of pipes at vertical position y.
+    // The 'x' value is always set to the width of the canvas so pipes start
+    // appearing at the right edge of the canvas.
+    const addPipeToList = (y) => {
+      pipeList.push(new PipePair(canvas.width, y));
+    };
+
+    const update = () => {
+      if (isFirstPipeOffScreen()) {
+        removeFirstPipe();
       }
-    }
 
-    function ready() {
-      return loadedImages === totalImages;
-    }
+      if (needNewPipe()) {
+        addPipeToList(randomY());
+      }
+    };
 
-    function reset() {
-      bird.xPos = 10;
-      bird.yPos = 150;
+    const reset = () => {
+      pipeList = [];
+      addPipeToList(0);
+    };
+
+    const getPipe = i => pipeList[i];
+
+    function forEach(callback) {
+      pipeList.forEach(callback);
     }
 
     return {
-      bird: bird,
-      background: background,
-      foreground: foreground,
-      pipeTop: pipeTop,
-      pipeBottom: pipeBottom,
-      ready: ready,
-      reset: reset,
-      pipes: pipes
-    }
+      forEach,
+      getPipe,
+      update,
+      reset,
+    };
+  };
 
-  })(assetsBaseUrl, drawing, pipes);
+  // Resets the entire game.
+  const reset = () => {
+    score.reset();
+    bird.reset();
+    pipes.reset();
+  };
 
-  // Sounds
-  const sounds = (function (assetsBaseUrl) {
-    const fly = new Audio();
-    const score = new Audio();
+  // See https://developer.mozilla.org/en-US/docs/Games/Techniques/2D_collision_detection
+  // Expects both obj1 and obj2 to have an x, y, height, and width.
+  const detectCollision = (obj1, obj2) => obj1.x < obj2.x + obj2.width
+    && obj1.x + obj1.width > obj2.x && obj1.y < obj2.y + obj2.height
+    && obj1.y + obj1.height > obj2.y;
 
-    fly.src = assetsBaseUrl + 'fly.mp3';
-    score.src = assetsBaseUrl + 'score.mp3';
-
-    return {
-      fly: fly,
-      score: score,
-    }
-
-  })(assetsBaseUrl);
-
-  function detectForegroundCollision () {
-    const birdBottom = images.bird.yPos + images.bird.height;
-    const foregroundTop = drawing.canvas.height - images.foreground.height;
-
-    if(birdBottom >= foregroundTop ) {
+  const detectForegroundCollision = () => {
+    if (detectCollision(bird, foreground)) {
       return true;
     }
+
     return false;
-  }
+  };
 
-  function drawScore() {
-    drawing.context.fillStyle = "#000";
-    drawing.context.font = "20px Verdana";
-    drawing.context.fillText("Score : " + game.score, 10, drawing.canvas.height - 20);
-  }
+  const detectPipeCollision = () => {
+    const pipePair = pipes.getPipe(0);
 
-  function detectPipeCollision() {
-
-    const pipe = pipes.getPipe(0);
-
-    const birdBack = images.bird.xPos;
-    const birdFront = birdBack + images.bird.width;
-    const pipeFront =  pipe.x;
-    const pipeBack =  pipeFront + images.pipeTop.width;
-
-    const birdTop = images.bird.yPos;
-    const birdBottom = birdTop + images.bird.height;
-    const pipeTopEdge = pipe.topY + images.pipeTop.height;
-    const pipeBottomEdge = pipe.bottomY;
-
-    function isBirdInsidePipeWidth () {
-      return (birdFront >= pipeFront && birdFront <= pipeBack) ||
-        (birdBack >= pipeFront && birdBack <= pipeBack);
+    // Top pipe
+    if (detectCollision(bird, pipePair.top)) {
+      return true;
     }
 
-    function isBirdInsidePipeVerticle() {
-      return (birdTop <= pipeTopEdge) || (birdBottom >= pipeBottomEdge);
+    // Bottom pipe
+    if (detectCollision(bird, pipePair.bottom)) {
+      return true;
     }
 
-    if (! isBirdInsidePipeVerticle()) return false;
+    return false;
+  };
 
-    if (! isBirdInsidePipeWidth()) return false;
+  // Sets up the game.
+  const setup = () => {
+    background = new Sprite(0, 0, images.get('background'));
 
-    return true;
+    pipes = createPipes();
 
-  }
+    foreground = new Sprite(
+      0,
+      canvas.height - images.get('foreground').height,
+      images.get('foreground'),
+    );
 
-  function play() {
-      
-    images.background.draw();
-  
-    images.pipes.draw();
+    bird = new Bird(0, 150, images.get('bird'), sounds.fly);
 
-    images.foreground.draw();
-    
-    images.bird.applyGravity();
+    // Move the bird up with any key press.
+    document.addEventListener('keydown', () => bird.moveUp());
 
-    images.bird.draw();
-    
+    // Increment the score when a pipe is removed.
+    document.addEventListener('pipeRemoved', () => score.plus());
+
+    // Play the score sound when the user scores.
+    document.addEventListener('scored', () => sounds.score.play());
+
+    // Play the "wings flapping" sound when the user scores.
+    document.addEventListener('birdMovedUp', () => sounds.fly.play());
+  };
+
+  const play = () => {
+    background.draw();
+
+    pipes.forEach((element) => {
+      element.move();
+      element.draw();
+    });
+    pipes.update();
+
+    foreground.draw();
+
+    bird.applyGravity();
+    bird.draw();
+
     if (detectPipeCollision()) {
-      game.reset();
+      reset();
     }
 
     if (detectForegroundCollision()) {
-      game.reset();
+      reset();
     }
 
-    drawScore();
+    score.draw();
 
     requestAnimationFrame(play);
+  };
 
-  }
+  const start = async () => {
+    await images.ready();
 
-  function start() {
-
-    // If images have not loaded, try again soon.
-    if (! images.ready()) {
-      setTimeout(start, 500);
-      return;
-    }
-
-    game.reset();
+    setup();
+    reset();
     play();
-  }
+  };
 
   return {
-    start: start    
-  }
-
+    start,
+  };
 })();
-
 
 flappyBird.start();
